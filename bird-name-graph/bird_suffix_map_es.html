@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>目-科鸟类后缀关系图（科内）</title>
+  <title>目-科鸟类后缀关系图（中文-西班牙语）</title>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
   <style>
     :root {
@@ -297,13 +297,13 @@
       <div class="graph-head">
         <div>
           <div class="graph-title" id="graphTitle">点击左侧“科”查看关系图</div>
-          <div class="graph-sub" id="graphSub">中文后缀：中文名最后一个字；英文后缀：英文名最后一个词</div>
+          <div class="graph-sub" id="graphSub">中文后缀：中文名最后一个字；西班牙语后缀：西班牙语名字的第一个词（动词后置语言）</div>
         </div>
         <div id="graphStat" class="graph-sub">未选择科</div>
       </div>
       <div class="chart-wrap">
         <div id="relationChart"></div>
-        <div id="emptyHint" class="empty-hint">请先在左侧点击科，渲染该科中文/英文后缀关系图。</div>
+        <div id="emptyHint" class="empty-hint">请先在左侧点击科，渲染该科中文/西班牙语后缀关系图。</div>
         <section id="detailPanel" class="detail-panel" aria-live="polite">
           <div class="detail-close" id="detailClose">✕</div>
           <h4 id="detailTitle" class="detail-title"></h4>
@@ -315,8 +315,26 @@
   </div>
 
   <script src="./bird_order_family_data.js"></script>
+  <script src="./bird_scientific_spanish_map.js"></script>
+  <script src="./ioc_scientific_spanish_sequence.js"></script>
   <script>
     const payload = window.BIRD_TAXONOMY_PAYLOAD || { orders: [], familyMap: {} };
+    const scientificSpanishMap = window.SCIENTIFIC_SPANISH_MAP || {};
+    const iocSpanishSequence = Array.isArray(window.IOC_SCIENTIFIC_SPANISH_SEQUENCE) ? window.IOC_SCIENTIFIC_SPANISH_SEQUENCE : [];
+    const iocScientificIndex = (() => {
+      const map = new Map();
+      iocSpanishSequence.forEach((item, index) => {
+        if (!item || !item.scientific) {
+          return;
+        }
+        const sci = String(item.scientific).trim();
+        if (!sci) {
+          return;
+        }
+        map.set(sci, index);
+      });
+      return map;
+    })();
     const treeContainer = document.getElementById('treeContainer');
     const treeMeta = document.getElementById('treeMeta');
     const graphTitle = document.getElementById('graphTitle');
@@ -403,16 +421,43 @@
       return text ? text.slice(-1) : '';
     }
 
-    function getEnglishSuffix(name) {
-      const text = (name || '')
-        .replace(/[\[\]();,，；:：.!?？！\-]/g, ' ')
+    function normalizeSpanishSuffix(name) {
+      return String(name || '')
+        .replace(/^[\s"“”'`]+|[\s"“”'`.,;:!?！？。!；：…]+$/g, '')
+        .trim();
+    }
+
+    function getSpanishSuffix(name) {
+      const text = normalizeSpanishSuffix(name)
         .replace(/\s+/g, ' ')
         .trim();
       if (!text) {
         return '';
       }
       const words = text.split(' ').filter(Boolean);
-      return words.length ? words[words.length - 1] : '';
+      return words.length ? words[0] : '';
+    }
+
+    function getSpanishFromIocNeighbors(scientificName) {
+      if (!scientificName) {
+        return '';
+      }
+      const sci = String(scientificName).trim();
+      if (!sci) {
+        return '';
+      }
+      const idx = iocScientificIndex.get(sci);
+      if (idx === undefined) {
+        return '';
+      }
+      const prev = idx > 0 ? iocSpanishSequence[idx - 1] : null;
+      const next = idx + 1 < iocSpanishSequence.length ? iocSpanishSequence[idx + 1] : null;
+      const prevWord = getSpanishSuffix(prev && prev.spanish ? prev.spanish : '');
+      const nextWord = getSpanishSuffix(next && next.spanish ? next.spanish : '');
+      if (!prevWord || !nextWord) {
+        return '';
+      }
+      return prevWord === nextWord ? prevWord : '';
     }
 
     function normalizeFamilyEnglishName(name) {
@@ -426,8 +471,15 @@
       const birds = Array.isArray(familyData.birds) ? familyData.birds : [];
       birds.forEach((bird) => {
         const cn = getChineseSuffix(bird.chinese);
-        const en = getEnglishSuffix(bird.english);
-        if (!cn || !en) return;
+        const scientific = String(bird.scientific || '').trim();
+        const directSpanish = bird.spanish || (scientific ? scientificSpanishMap[scientific] : '');
+        const inferredSuffix = scientific ? getSpanishFromIocNeighbors(scientific) : '';
+        const spanishSuffix = directSpanish ? getSpanishSuffix(directSpanish) : inferredSuffix;
+        if (!spanishSuffix) {
+          return;
+        }
+        const en = spanishSuffix;
+        if (!cn) return;
 
         const key = `cn:${cn}||en:${en}`;
         if (!edgeMap.has(key)) {
@@ -441,13 +493,14 @@
           });
         }
         const bucket = edgeMap.get(key);
-        const bKey = `${bird.chinese}||${bird.english}`;
+        const bKey = `${bird.chinese}||${bird.scientific}||${en}`;
         if (!bucket.birdSet.has(bKey)) {
           bucket.birdSet.add(bKey);
           bucket.count += 1;
           bucket.birds.push({
             chinese: bird.chinese || '',
             english: bird.english || '',
+            spanish: directSpanish || inferredSuffix || '',
             scientific: bird.scientific || ''
           });
         }
@@ -644,6 +697,215 @@
       return [...items.slice(-1), ...items.slice(0, -1)];
     }
 
+    function rotateListClockwiseBy(items, step = 1) {
+      if (!Array.isArray(items) || items.length < 2 || !step) {
+        return [...(items || [])];
+      }
+      const normalizedStep = ((step % items.length) + items.length) % items.length;
+      if (!normalizedStep) {
+        return [...items];
+      }
+      return [...items.slice(-normalizedStep), ...items.slice(0, -normalizedStep)];
+    }
+
+    function optimizeByCircularRotation(cnOrder, enOrder, edges, maxExhaustivePairs = 800) {
+      if (!cnOrder.length || !enOrder.length || !edges.length) {
+        return { cn: [...cnOrder], en: [...enOrder] };
+      }
+
+      let bestCn = [...cnOrder];
+      let bestEn = [...enOrder];
+      let bestCost = crossingCost(bestCn, bestEn, edges);
+
+      const cnLen = cnOrder.length;
+      const enLen = enOrder.length;
+      const exhaustive = cnLen * enLen <= maxExhaustivePairs;
+
+      const consider = (candCn, candEn) => {
+        const cost = crossingCost(candCn, candEn, edges);
+        if (cost < bestCost) {
+          bestCost = cost;
+          bestCn = [...candCn];
+          bestEn = [...candEn];
+        }
+      };
+
+      if (exhaustive) {
+        for (let rc = 0; rc < cnLen; rc += 1) {
+          const rotatedCn = rotateListClockwiseBy(cnOrder, rc);
+          const reversedCn = [...rotatedCn].reverse();
+          for (let re = 0; re < enLen; re += 1) {
+            const rotatedEn = rotateListClockwiseBy(enOrder, re);
+            const reversedEn = [...rotatedEn].reverse();
+            consider(rotatedCn, rotatedEn);
+            consider(rotatedCn, reversedEn);
+            consider(reversedCn, rotatedEn);
+            consider(reversedCn, reversedEn);
+          }
+        }
+        return { cn: bestCn, en: bestEn };
+      }
+
+      // 启发式搜索：在当前基准上交替旋转中文/西语节点，寻找更低交叉数
+      for (let iter = 0; iter < 10; iter += 1) {
+        let improved = false;
+        let currentCn = [...bestCn];
+        for (let rc = 0; rc < cnLen; rc += 1) {
+          const rotatedCn = rotateListClockwiseBy(currentCn, rc);
+          let localBestEn = [...bestEn];
+          let localBestCost = crossingCost(rotatedCn, localBestEn, edges);
+
+          for (let re = 0; re < enLen; re += 1) {
+            const rotatedEn = rotateListClockwiseBy(bestEn, re);
+            const cost = crossingCost(rotatedCn, rotatedEn, edges);
+            if (cost < localBestCost) {
+              localBestCost = cost;
+              localBestEn = rotatedEn;
+            }
+          }
+
+          if (localBestCost < bestCost) {
+            bestCost = localBestCost;
+            currentCn = rotatedCn;
+            bestEn = localBestEn;
+            improved = true;
+          }
+        }
+        bestCn = currentCn;
+        if (!improved) {
+          break;
+        }
+      }
+
+      return { cn: bestCn, en: bestEn };
+    }
+
+    function buildNodeNeighborBuckets(edges) {
+      const cnToEn = new Map();
+      const allEnSet = new Set();
+      edges.forEach((edge) => {
+        if (!cnToEn.has(edge.cn)) {
+          cnToEn.set(edge.cn, []);
+        }
+        cnToEn.get(edge.cn).push({ en: edge.en, count: edge.count || 0 });
+        allEnSet.add(edge.en);
+      });
+
+      cnToEn.forEach((list, cn) => {
+        list.sort((a, b) => {
+          if ((b.count || 0) !== (a.count || 0)) {
+            return (b.count || 0) - (a.count || 0);
+          }
+          return a.en.localeCompare(b.en);
+        });
+      });
+
+      return {
+        cnToEn,
+        enNodes: [...allEnSet]
+      };
+    }
+
+    function generateCombinations(arrays, index = 0, prefix = [], out = []) {
+      if (index >= arrays.length) {
+        out.push([...prefix]);
+        return out;
+      }
+      arrays[index].forEach((value) => {
+        prefix.push(value);
+        generateCombinations(arrays, index + 1, prefix, out);
+        prefix.pop();
+      });
+      return out;
+    }
+
+    function optimizePhasianidaeLayout(cnOrder, enOrder, edges) {
+      const focusCn = ['鹑', '鸟', '雀'];
+      if (!cnOrder.includes('鹑') || !cnOrder.includes('鸟') || !cnOrder.includes('雀')) {
+        return { cn: [...cnOrder], en: [...enOrder] };
+      }
+
+      const { cnToEn } = buildNodeNeighborBuckets(edges);
+      let allMappedEn = [];
+      for (const cn of focusCn) {
+        const list = cnToEn.get(cn) || [];
+        const top = list.slice(0, Math.min(2, list.length)).map((item) => item.en);
+        const fallback = top.length ? top : [];
+        if (!fallback.length) {
+          return { cn: [...cnOrder], en: [...enOrder] };
+        }
+        allMappedEn.push(fallback);
+      }
+
+      const combos = generateCombinations(allMappedEn);
+      if (!combos.length) {
+        return { cn: [...cnOrder], en: [...enOrder] };
+      }
+
+      let bestCn = [...cnOrder];
+      let bestEn = [...enOrder];
+      let bestCost = crossingCost(bestCn, bestEn, edges);
+      const baseCn = [...cnOrder];
+      const baseEn = [...enOrder];
+
+      const permute3 = (arr) => {
+        if (arr.length !== 3) return [arr];
+        const a = [0, 1, 2];
+        const result = [];
+        for (let i = 0; i < 3; i += 1) {
+          for (let j = 0; j < 3; j += 1) {
+            if (j === i) {
+              continue;
+            }
+            for (let k = 0; k < 3; k += 1) {
+              if (k === i || k === j) {
+                continue;
+              }
+              result.push([arr[i], arr[j], arr[k]]);
+            }
+          }
+        }
+        return result;
+      };
+
+      const candidateCnPerms = permute3(focusCn);
+      for (let p = 0; p < candidateCnPerms.length; p += 1) {
+        const cnPattern = candidateCnPerms[p];
+        const reorderedCn = reorderSubsetToPattern(baseCn, cnPattern);
+
+      combos.forEach((mappedEn) => {
+        if (!mappedEn.every((name) => baseEn.includes(name))) {
+          return;
+        }
+          const mappedByCn = {
+            鹑: mappedEn[0],
+            鸟: mappedEn[1],
+            雀: mappedEn[2]
+          };
+          const enPattern = cnPattern.map((cn) => mappedByCn[cn]);
+
+          const aligned = reorderSubsetToPattern(baseEn, enPattern);
+          const candidateSet = optimizeByCircularRotation(reorderedCn, aligned, edges, 300);
+          const baseCost = crossingCost(candidateSet.cn, candidateSet.en, edges);
+          if (baseCost < bestCost) {
+            bestCost = baseCost;
+            bestCn = candidateSet.cn;
+            bestEn = candidateSet.en;
+          }
+
+          const shiftedEn = rotateListClockwiseBy(candidateSet.en, Math.max(1, Math.floor(candidateSet.en.length / 2)));
+          const altCost = crossingCost(reorderedCn, shiftedEn, edges);
+          if (altCost < bestCost) {
+            bestCost = altCost;
+            bestCn = [...reorderedCn];
+            bestEn = shiftedEn;
+          }
+        });
+      }
+
+      return { cn: bestCn, en: bestEn };
+    }
+
     function swapPair(items, a, b) {
       const idxA = items.indexOf(a);
       const idxB = items.indexOf(b);
@@ -656,6 +918,28 @@
       return next;
     }
 
+    function reorderSubsetToPattern(items, pattern) {
+      if (!Array.isArray(items) || !Array.isArray(pattern) || !pattern.length) {
+        return [...(items || [])];
+      }
+      const indexSet = new Map();
+      pattern.forEach((name) => {
+        const idx = items.indexOf(name);
+        if (idx !== -1) {
+          indexSet.set(name, idx);
+        }
+      });
+      if (indexSet.size !== pattern.length) {
+        return [...items];
+      }
+
+      const filtered = items.filter((name) => !indexSet.has(name));
+      const anchor = Math.min(...Array.from(indexSet.values()));
+      const before = filtered.filter((_, i) => i < anchor);
+      const after = filtered.filter((_, i) => i >= anchor);
+      return [...before, ...pattern, ...after];
+    }
+
     function applyManualOrders(familyName, cnOrder, enOrder) {
       let orderedCn = [...cnOrder];
       let orderedEn = [...enOrder];
@@ -663,16 +947,24 @@
       if (familyName === '鹰科') {
         orderedCn = swapPair(orderedCn, '鵟', '鹫');
         orderedEn = swapPair(orderedEn, 'Lammergeier', 'Buzzard');
+        orderedEn = swapPair(orderedEn, 'Busardo', 'Alimoche');
       }
 
       if (familyName === '鹟科') {
-        orderedCn = swapPair(orderedCn, '尾', '鹟');
+        orderedCn = reorderSubsetToPattern(orderedCn, ['尾', '鸲', '鹟']);
+        orderedEn = swapPair(orderedEn, 'Papamoscas', 'Ruiseñor');
+        orderedEn = swapPair(orderedEn, 'Papamoscas', 'Shama');
         orderedEn = swapPair(orderedEn, 'Niltava', 'Forktail');
       }
 
       if (familyName === '鸭科') {
+        orderedCn = rotateListClockwiseBy(orderedCn, 1);
         orderedEn = swapPair(orderedEn, 'Swan', 'Shoveler');
         orderedEn = swapPair(orderedEn, 'Goose', 'Shelduck');
+      }
+
+      if (familyName === '丘鹬科') {
+        orderedEn = rotateListClockwiseBy(orderedEn, 2);
       }
 
       return { orderedCn, orderedEn };
@@ -823,7 +1115,14 @@
       let orderedCn = refined.cn;
       let orderedEn = refined.en;
 
-      if (['鹟科', '丘鹬科', '雉科', '鹰科'].includes(familyName)) {
+      if (familyName === '雉科') {
+        const improved = optimizeByCircularRotation(orderedCn, orderedEn, edges);
+        const phasian = optimizePhasianidaeLayout(improved.cn, improved.en, edges);
+        orderedCn = phasian.cn;
+        orderedEn = phasian.en;
+      }
+
+      if (['鹟科', '丘鹬科', '鹰科'].includes(familyName)) {
         orderedCn = rotateListClockwise(orderedCn);
       }
       const adjusted = applyManualOrders(familyName, orderedCn, orderedEn);
@@ -918,7 +1217,7 @@
           edgeCount: edges.length,
           totalBirds: edges.reduce((sum, e) => sum + e.count, 0)
         },
-        subtitle: `${orderName} > ${familyName} · 中文后缀${cnList.length}个；英文后缀${enList.length}个；${edges.length}条关系`
+        subtitle: `${orderName} > ${familyName} · 中文后缀${cnList.length}个；西班牙语后缀${enList.length}个；${edges.length}条关系`
       };
     }
 
@@ -983,12 +1282,24 @@
         return;
       }
       detailTitle.textContent = `${linkData.cn} ↔ ${linkData.en}`;
-      detailCount.textContent = `${linkData.count} 种关系；包含 ${linkData.birds.length} 条独特鸟名（按中文名排序）`;
+      detailCount.textContent = `${linkData.count} 条关系；包含 ${linkData.birds.length} 条独特鸟名（按中文名排序）`;
 
       detailList.innerHTML = '';
       linkData.birds.forEach((bird) => {
         const li = document.createElement('li');
-        li.innerHTML = `<b>${bird.chinese}</b> / ${bird.english}${bird.scientific ? ` <span style="color:#71809e">（${bird.scientific}）</span>` : ''}`;
+        const spanishName = bird.spanish || '';
+        const englishName = bird.english || '';
+        const info = [];
+        if (spanishName) {
+          info.push(`西班牙语：${spanishName}`);
+        }
+        if (englishName) {
+          info.push(`英文：${englishName}`);
+        }
+        if (bird.scientific) {
+          info.push(`学名：${bird.scientific}`);
+        }
+        li.innerHTML = `<b>${bird.chinese}</b> / ${info.join('；')}`;
         detailList.appendChild(li);
       });
       detailPanel.classList.add('show');
@@ -1025,8 +1336,8 @@
       currentFamilyKey = familyKey;
 
       graphTitle.textContent = `${orderName} · ${familyName}`;
-      graphSub.textContent = `关系图布局：${mode === 'split' ? '左右两列' : '同心圆（内中文、外英文）'}`;
-      graphStat.textContent = `${stats.cnCount} 个中文后缀 / ${stats.enCount} 个英文后缀 / ${stats.edgeCount} 条关系 / ${stats.totalBirds} 物种`;
+      graphSub.textContent = `关系图布局：${mode === 'split' ? '左右两列' : '同心圆（内中文、外西班牙语）'}`;
+      graphStat.textContent = `${stats.cnCount} 个中文后缀 / ${stats.enCount} 个西班牙语后缀 / ${stats.edgeCount} 条关系 / ${stats.totalBirds} 物种`;
 
       emptyHint.style.display = 'none';
 
