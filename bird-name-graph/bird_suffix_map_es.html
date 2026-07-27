@@ -958,9 +958,11 @@
       }
 
       if (familyName === '鸭科') {
+        orderedCn = swapPair(orderedCn, '鸭', '鸯');
         orderedCn = rotateListClockwiseBy(orderedCn, 1);
         orderedEn = swapPair(orderedEn, 'Swan', 'Shoveler');
         orderedEn = swapPair(orderedEn, 'Goose', 'Shelduck');
+        orderedEn = swapPair(orderedEn, 'Pato', 'Cuchara');
       }
 
       if (familyName === '丘鹬科') {
